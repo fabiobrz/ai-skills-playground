@@ -1,20 +1,28 @@
 ---
 name: webservices-dependency-upgrade
 description: Test and validate WildFly XML Web Services component dependency upgrades from dependabot PRs
-args: pr_url wildfly_path jbossws_path
+args: pr_url
 ---
 
 # WildFly XML Web Services Component Upgrade Validation
 
 You are executing a skill to validate Web Services component dependency upgrades in WildFly. 
-This workflow tests dependabot PRs that update dependencies in the webservices group (see .github/dependabot.yml).
+This workflow tests PRs that update dependencies in the webservices group. Such PRs are currently created by 
+dependabot in most cases (see .github/dependabot.yml), but it applies to Prs that can be opened by developers on 
+a different input (e.g.: a component upgrade report).
 
 ## Parameters
 
 Parse the args string to extract:
 - `pr_url` (required): PR URL or PR number (assume wildfly/wildfly if just a number)
-- `wildfly_path` (required): Path to local WildFly repo (prompt user if not provided)
-- `jbossws_path` (required): Path to local jbossws-cxf repo (prompt user if not provided)
+
+Both the WildFly and jbossws-cxf repositories are cloned automatically. Derive a workspace root from the PR number:
+
+```
+WORKSPACE=/tmp/wildfly-upgrade-<pr_number>
+WILDFLY_REPO=$WORKSPACE/wildfly
+JBOSSWS_REPO=$WORKSPACE/jbossws-cxf
+```
 
 ## Instructions
 
@@ -49,7 +57,48 @@ Could you please review these before proceeding?
 ```
 Then STOP the skill execution.
 
-### Step 2: Analyze Affected Artifacts
+### Step 2: Clone WildFly Repository
+
+Derive the workspace paths from `pr_url`:
+
+```bash
+WORKSPACE=/tmp/wildfly-upgrade-<pr_number>
+WILDFLY_REPO=$WORKSPACE/wildfly
+JBOSSWS_REPO=$WORKSPACE/jbossws-cxf
+```
+
+**Existing-workspace check**: If `$WORKSPACE` already exists, prompt the user:
+> "Found an existing workspace at $WORKSPACE. Reuse it or start fresh?"
+
+- **Start fresh**: `rm -rf $WORKSPACE`, then proceed to clone both repos normally in their respective steps.
+- **Reuse**: keep `$WORKSPACE` as-is. In this step and in Step 5, skip cloning any repo directory that already exists — handle partial reuse gracefully (e.g. WildFly was cloned but the run stopped before jbossws-cxf).
+
+If `$WORKSPACE` does not exist, create it and proceed without prompting.
+
+**Important**: Test against the main branch, not the PR branch directly. The PR branch may be stale compared to main.
+
+Clone WildFly (skip if reusing and `$WILDFLY_REPO` already exists):
+```bash
+git clone --depth 1 https://github.com/wildfly/wildfly.git $WILDFLY_REPO
+cd $WILDFLY_REPO
+```
+
+Apply the PR changes to main:
+```bash
+# Fetch the PR branch and find its commits
+git fetch origin pull/<pr_number>/head:pr-<pr_number>
+git log pr-<pr_number> --not main --oneline
+
+# Cherry-pick the PR commits onto main
+git cherry-pick <commit-sha>
+...
+```
+
+Report the git status and show the applied changes with `git show HEAD --stat`.
+
+**Interactive Checkpoint**: "WildFly main branch cloned and PR changes cherry-picked. Ready to analyze affected artifacts?"
+
+### Step 3: Analyze Affected Artifacts
 
 Fetch the PR diff using `gh pr diff <pr_number>` or GitHub API.
 
@@ -58,8 +107,8 @@ Parse the diff to identify:
 2. Which property versions changed (name and old→new value)
 3. Which groupId:artifactId patterns are affected (cross-reference with .github/dependabot.yml webservices group)
 
-Search the WildFly codebase to determine usage:
-- For each affected artifact, use `grep -r "groupId>artifact-group</groupId>" --include="pom.xml"` 
+Search the WildFly codebase to determine usage (runs against `$WILDFLY_REPO`):
+- For each affected artifact, use `grep -r "groupId>artifact-group</groupId>" --include="pom.xml" $WILDFLY_REPO`
 - Identify which modules/subsystems use these artifacts
 - Classify: "Used exclusively by XML Web Services subsystem" vs "Used by WS and other components"
 
@@ -70,7 +119,7 @@ Affected artifacts:
   Used by: webservices subsystem, testsuite/integration/ws
   Classification: WS-only
 
-- org.glassfish.jaxb:jaxb-runtime: 4.0.6 → 4.0.8  
+- org.glassfish.jaxb:jaxb-runtime: 4.0.6 → 4.0.8
   Used by: webservices, ee-feature-pack, multiple testsuites
   Classification: Broader usage (WS + EE platform)
 ```
@@ -78,37 +127,11 @@ Affected artifacts:
 **Interactive Checkpoint**: Present the summary and ask: "Does this change look legitimate from a high-level perspective? Proceed with testing?"
 Stop the skill execution in case the user does not confirm, and suggest to conduct further investigation.
 
-### Step 3: Prepare WildFly Repository
-
-Navigate to the WildFly repo path:
-- `cd` to `wildfly_path`
-
-**Important**: Test against the main branch, not the PR branch directly. The PR branch may be stale compared to main.
-
-Execute:
-```bash
-git fetch upstream
-git pull upstream main
-```
-
-Apply the PR changes to main:
-```bash
-# Find the PR commit
-git log <pr_branch> --not main --oneline
-
-# Cherry-pick the PR commits onto main
-git cherry-pick <commit-sha>
-...
-```
-
-Report the git status and show the applied changes with `git show HEAD --stat`.
-
-**Interactive Checkpoint**: "WildFly main branch updated with PR changes cherry-picked. Ready to build?"
-
 ### Step 4: Quick Build WildFly
 
-Execute:
+Execute from `$WILDFLY_REPO`:
 ```bash
+cd $WILDFLY_REPO
 mvn clean install -DskipTests
 ```
 
@@ -119,24 +142,21 @@ Monitor the build output. If build fails:
 
 If user chooses (b), draft a comment explaining the local build issue prevents validation.
 
-On success, note the WildFly SNAPSHOT location (typically `dist/target/wildfly-<version>-SNAPSHOT/`).
+On success, note the WildFly SNAPSHOT location (typically `$WILDFLY_REPO/dist/target/wildfly-<version>-SNAPSHOT/`).
 
 ### Step 5: Prepare jbossws-cxf Repository
 
-Parse the WildFly POM to find the jbossws-cxf version:
+Parse the WildFly POM (`$WILDFLY_REPO/pom.xml`) to find the jbossws-cxf version:
 - Look for property matching `version.org.jboss.ws.cxf` or similar
 - Extract the version value (e.g., "7.3.8.Final")
 
-Navigate to the local jbossws-cxf path:
-- `cd` to `jbossws_path`
-
-Checkout the tag used by WildFly:
+Clone jbossws-cxf at that tag (skip if reusing and `$JBOSSWS_REPO` already exists):
 ```bash
-git fetch --tags
-git checkout tags/<version>
+git clone --depth 1 --branch <version> https://github.com/jbossws/jbossws-cxf.git $JBOSSWS_REPO
+cd $JBOSSWS_REPO
 ```
 
-Report: "Checked out jbossws-cxf version <version>"
+Report: "Cloned jbossws-cxf at tag <version> into $JBOSSWS_REPO"
 
 **Interactive Checkpoint**: "jbossws-cxf prepared at tag <version>. Ready to build?"
 
@@ -151,7 +171,7 @@ Report build status. If failures occur, follow same pattern as Step 4.
 
 ### Step 7: Run jbossws-cxf Tests
 
-Construct the WildFly home path from Step 4 (should be `<wildfly_repo>/dist/target/wildfly-<version>-SNAPSHOT`).
+Construct the WildFly home path from Step 4 (should be `$WILDFLY_REPO/dist/target/wildfly-<version>-SNAPSHOT`).
 
 Execute:
 ```bash
@@ -173,7 +193,7 @@ Monitor and report:
 
 Change directory:
 ```bash
-cd <wildfly_repo>/testsuite/integration/ws
+cd $WILDFLY_REPO/testsuite/integration/ws
 ```
 
 Execute:
@@ -320,7 +340,7 @@ At any step, if an unexpected error occurs:
 
 ### 1. Test Against Main Branch, Not PR Branch
 The dependabot PR branch may be stale compared to main. Always:
-- Pull latest main branch
+- Clone the main branch fresh
 - Cherry-pick the PR commit onto main
 - Test against this updated main branch
 
