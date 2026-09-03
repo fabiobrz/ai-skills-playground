@@ -3,3 +3,5 @@
 *.tar.gz
 *.rar
 
+# IntelliJ IDEA files
+.idea/
