@@ -33,8 +33,9 @@ Execute the following steps in order. This is an INTERACTIVE workflow - prompt t
 Determine if `gh` CLI is available by running `which gh` or `gh --version`.
 
 If `gh` is available:
-- Use `gh pr view <pr_number> --repo wildfly/wildfly --json statusCheckRollup` to get CI status
+- Use `gh pr checks <pr_number> --repo wildfly/wildfly` to get CI status — this returns accurate, up-to-date results for both GitHub Actions and external checks (e.g. TeamCity)
 - Report: "Using GitHub CLI to check CI status"
+- **Do NOT use** `gh pr view --json statusCheckRollup` — it returns stale/incomplete data for external checks (e.g. TeamCity checks show as null status even when completed)
 
 Otherwise:
 - Use GitHub API: `curl https://api.github.com/repos/wildfly/wildfly/pulls/<pr_number>/checks` - be aware of the actual repository where the PR is submitted, the `wildfly/wildfly` case covers the default use case, which should be close to the 100% of the cases.
@@ -85,16 +86,13 @@ cd $WILDFLY_REPO
 
 Apply the PR changes to main:
 ```bash
-# Fetch the PR branch and find its commits
-git fetch origin pull/<pr_number>/head:pr-<pr_number>
-git log pr-<pr_number> --not main --oneline
-
-# Cherry-pick the PR commits onto main
-git cherry-pick <commit-sha>
-...
+# Fetch the PR diff and apply it directly onto main
+gh pr diff <pr_number> --repo wildfly/wildfly | git apply
 ```
 
-Report the git status and show the applied changes with `git show HEAD --stat`.
+**Do NOT use** `git fetch origin pull/<pr_number>/head` + cherry-pick — with a shallow clone (`--depth 1`), the `git log pr-branch --not main` comparison has no shared history and will hang.
+
+Report the git status and show the applied changes with `git diff --stat`.
 
 **Interactive Checkpoint**: "WildFly main branch cloned and PR changes cherry-picked. Ready to analyze affected artifacts?"
 
@@ -109,6 +107,8 @@ Parse the diff to identify:
 
 Search the WildFly codebase to determine usage (runs against `$WILDFLY_REPO`):
 - For each affected artifact, use `grep -r "groupId>artifact-group</groupId>" --include="pom.xml" $WILDFLY_REPO`
+- Find which JBoss module definitions include the artifact: `find $WILDFLY_REPO -name "module.xml" -exec grep -l "artifact-id" {} \;`
+- **Trace the module dependency chain**: for each module found above, search for other modules that depend on it: `grep -rl "module-name" --include="module.xml" $WILDFLY_REPO`. Follow the chain until all consuming subsystems are identified. An artifact may appear unrelated to WS at first level (e.g. `org.opensaml`) but be consumed by WS modules transitively (e.g. `org.apache.cxf.impl`, `org.apache.cxf.ws-security`).
 - Identify which modules/subsystems use these artifacts
 - Classify: "Used exclusively by XML Web Services subsystem" vs "Used by WS and other components"
 
@@ -377,7 +377,7 @@ For each upgraded component identified in Step 2:
    - Identify the GitHub repository for this artifact (e.g., org.apache.cxf → https://github.com/apache/cxf)
    - Construct Tag URL: `https://github.com/<org>/<repo>/releases/tag/<new-version>`
    - Construct Diff URL: `https://github.com/<org>/<repo>/compare/<old-version>...<new-version>`
-   - Extract SHA: Use `git ls-remote https://github.com/<org>/<repo> refs/tags/<new-version>` or GitHub API
+   - Extract SHA: Use the GitHub API to get the tag ref, then **dereference annotated tags** to get the actual commit SHA. An annotated tag's ref points to a tag object, not the commit. Use `gh api repos/<org>/<repo>/git/refs/tags/<tag>` to get the tag object SHA, then if the type is `tag` (annotated), dereference it with `gh api repos/<org>/<repo>/git/tags/<tag-sha>` to get the commit SHA from `.object.sha`.
 
 Present each Jira issue proposal separately:
 ```
@@ -426,7 +426,7 @@ At any step, if an unexpected error occurs:
 ### 1. Test Against Main Branch, Not PR Branch
 The dependabot PR branch may be stale compared to main. Always:
 - Clone the main branch fresh
-- Cherry-pick the PR commit onto main
+- Apply the PR diff onto main using `gh pr diff | git apply`
 - Test against this updated main branch
 
 This ensures validation against the most current codebase state.
