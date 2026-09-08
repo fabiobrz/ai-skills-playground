@@ -1,5 +1,5 @@
 ---
-name: webservices-dependency-upgrade
+name: wildfly-component-dependency-upgrade
 description: Test and validate WildFly XML Web Services component dependency upgrades from dependabot PRs
 args: pr_url
 ---
