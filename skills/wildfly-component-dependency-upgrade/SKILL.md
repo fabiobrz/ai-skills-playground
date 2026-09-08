@@ -174,10 +174,14 @@ Report build status. If failures occur, follow same pattern as Step 4.
 
 ### Step 7: Run jbossws-cxf Tests
 
+**Goal:** Validate that the test scenarios shipped with the jbossws-cxf version currently bundled in WildFly continue to work after the component upgrade is applied to WildFly. At this point jbossws-cxf still uses its own (unmodified) dependency versions; WildFly is the only thing that has changed.
+
 Construct the WildFly home path from Step 4 (should be `$WILDFLY_REPO/dist/target/wildfly-<version>-SNAPSHOT`).
 
 Execute:
 ```bash
+# -Dnodeploy: WildFly already ships the upgraded components as JBoss modules.
+# jbossws-cxf dependencies are unchanged here, so we do NOT redeploy them.
 mvn verify -Dexclude-udp-tests -Dexclude-ws-discovery-tests -Dserver.home=<WILDFLY_HOME> -Ptestsuite,dist -Dnodeploy
 ```
 
@@ -191,6 +195,18 @@ Monitor and report:
 - If tests fail: "✗ jbossws-cxf tests failed: [summary]. Options: (a) Investigate and I'll provide resolution; (b) Appears unrelated, continue; (c) Stop and draft PR comment"
 
 ### Step 8: Run WildFly Integration Tests
+
+**Interactive Checkpoint**:
+```
+The WildFly integration tests can be skipped if the upstream CI checks (Step 1) already
+cover this coverage area. Skip this step?
+
+Options:
+  (a) Run the integration tests (continue with Steps 8a–8c as normal)
+  (b) Skip — CI checks are sufficient
+```
+
+If the user chooses **(b)**, skip Steps 8a–8c entirely and proceed directly to Step 9.
 
 **IMPORTANT**: This step must run BEFORE Step 9 (dependency alignment). If jbossws-cxf is rebuilt with aligned dependencies first, those artifacts are installed to the local .m2 repository and could contaminate these tests.
 
@@ -249,6 +265,20 @@ Monitor and report for each submodule:
 
 ### Step 9: Check jbossws-cxf Dependency Alignment
 
+**Goal:** Validate that the same jbossws-cxf test scenarios would still work after jbossws-cxf itself bumps the same component version — i.e., a forward-looking compatibility check. This step is optional: it is most valuable when the upgraded artifact has "Broader usage" classification (Step 3), or when the project maintainer wants to pre-validate the eventual jbossws-cxf upgrade.
+
+**Interactive Checkpoint**:
+```
+Step 9 is a forward-looking optional check: it rebuilds jbossws-cxf with the upgraded
+dependency versions to validate future compatibility. Skip this step?
+
+Options:
+  (a) Perform dependency alignment check and retest
+  (b) Skip — forward-looking validation not needed for this PR
+```
+
+If the user chooses **(b)**, skip the rest of Step 9, proceed to Step 10, and note "Step 9 skipped" in the report.
+
 Parse the jbossws-cxf POM (typically at the root or in `modules/client/pom.xml` and similar):
 - Look for dependencies matching the groupId:artifactId patterns from Step 2
 - Compare versions with the upgrade target versions
@@ -259,7 +289,17 @@ If misalignment found:
 
 If user agrees:
 - Modify the jbossws-cxf POM(s) to update the property or version
-- Re-execute Steps 6 and 7 (build and test)
+- Rebuild and retest with the aligned dependency versions:
+
+```bash
+# Rebuild jbossws-cxf with aligned dependency versions
+mvn clean install -DskipTests -Ptestsuite,dist
+
+# Retest: omit -Dnodeploy so the updated jbossws-cxf artifacts are deployed
+# into the WildFly distribution alongside the upgraded components.
+mvn verify -Dexclude-udp-tests -Dexclude-ws-discovery-tests -Dserver.home=<WILDFLY_HOME> -Ptestsuite,dist
+```
+
 - Report results
 - Add note to final report: "Note: jbossws-cxf dependencies were aligned to match upgrade target"
 
@@ -293,15 +333,21 @@ Compile a comprehensive report with the following sections:
 [Details if applicable]
 
 ### WildFly Integration Tests (Step 8)
+⊘ Skipped — CI checks were deemed sufficient.
+OR
 Submodules run: [comma-separated list of actual submodules from Step 8]
 
 ✓/✗ [Per-submodule result summary]
 [Details if applicable]
 
 ### jbossws-cxf Dependency Alignment
+⊘ Step 9 skipped — forward-looking validation not required for this PR.
+OR
 [Note if alignment was performed in Step 9]
 
 ### jbossws-cxf Tests (Aligned Dependencies)
+⊘ Step 9 skipped.
+OR
 ✓/✗ [Results from Step 9 rebuild/retest, if performed]
 [Details if applicable]
 
@@ -393,10 +439,10 @@ This ensures validation against the most current codebase state.
 **Correct sequence**:
 1. Build jbossws-cxf with its original dependency versions (Step 6)
 2. Test jbossws-cxf against upgraded WildFly (Step 7)
-3. Test WildFly integration test submodules (Step 8) — `ws` always included; additional submodules determined by Step 3 artifact classification
-4. THEN align jbossws-cxf dependencies and retest (Step 9)
+3. Test WildFly integration test submodules (Step 8, **optional**) — `ws` always included; additional submodules determined by Step 3 artifact classification; may be skipped if CI checks already cover this area
+4. THEN align jbossws-cxf dependencies and retest (Step 9, **optional**) — forward-looking check; most valuable for "Broader usage" artifacts or when pre-validating the eventual jbossws-cxf upgrade
 
 This two-stage approach validates:
-- Forward compatibility: upgraded WildFly works with current jbossws-cxf
-- Dependency compatibility: aligned jbossws-cxf versions also work correctly
+- **Stage 1 (Step 7, always):** upgraded WildFly works with current jbossws-cxf (`-Dnodeploy`; WildFly's JBoss modules carry the upgrade)
+- **Stage 2 (Step 9, optional):** aligned jbossws-cxf dependency versions also work correctly (no `-Dnodeploy`; updated jbossws-cxf artifacts are deployed into the distribution)
 
