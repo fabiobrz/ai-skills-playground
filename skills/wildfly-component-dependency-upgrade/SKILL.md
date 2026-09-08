@@ -124,6 +124,9 @@ Affected artifacts:
   Classification: Broader usage (WS + EE platform)
 ```
 
+Artifacts classified as "Broader usage (WS + other components)" will be used in Step 8 to
+discover additional integration test submodules to run alongside `testsuite/integration/ws`.
+
 **Interactive Checkpoint**: Present the summary and ask: "Does this change look legitimate from a high-level perspective? Proceed with testing?"
 Stop the skill execution in case the user does not confirm, and suggest to conduct further investigation.
 
@@ -187,28 +190,62 @@ Monitor and report:
 - If all tests pass: "✓ jbossws-cxf tests passed with the upgraded components. Continue?"
 - If tests fail: "✗ jbossws-cxf tests failed: [summary]. Options: (a) Investigate and I'll provide resolution; (b) Appears unrelated, continue; (c) Stop and draft PR comment"
 
-### Step 8: Run WildFly WS Integration Tests
+### Step 8: Run WildFly Integration Tests
 
-**IMPORTANT**: This step must run BEFORE Step 9 (dependency alignment). If jbossws-cxf is rebuilt with aligned dependencies first, those artifacts are installed to local .m2 repository and could contaminate these tests.
+**IMPORTANT**: This step must run BEFORE Step 9 (dependency alignment). If jbossws-cxf is rebuilt with aligned dependencies first, those artifacts are installed to the local .m2 repository and could contaminate these tests.
 
-Change directory:
+#### 8a. Discover additional integration test submodules
+
+For each artifact classified in Step 3 as "Broader usage (WS + other components)", scan
+`$WILDFLY_REPO/testsuite/integration/` for subdirectories whose `pom.xml` references that
+artifact's groupId or artifactId:
+
 ```bash
-cd $WILDFLY_REPO/testsuite/integration/ws
+grep -rl "<groupId>ARTIFACT_GROUP</groupId>\|<artifactId>ARTIFACT_ID</artifactId>" \
+     $WILDFLY_REPO/testsuite/integration/*/pom.xml
 ```
 
-Execute:
-```bash
-mvn test
+Collect each matching subdirectory name (e.g., `basic`, `elytron`). `ws` is always included
+and never duplicated even if the grep returns it.
+
+#### 8b. Confirm submodule list with the user
+
+Present the candidate list as paths relative to `$WILDFLY_REPO`:
+
+```
+Planned integration test submodules:
+  testsuite/integration/ws          ← always included
+  testsuite/integration/basic       ← org.glassfish.jaxb:jaxb-runtime found in pom.xml
+  ...
+
+Options:
+  (a) Run with this list as-is
+  (b) Remove one or more submodules (specify which)
+  (c) Add submodules manually (specify paths)
+  (d) Run ws only
 ```
 
-Monitor and report:
+Wait for the user's confirmation. Adjust the list according to any (b)/(c)/(d) response
+before proceeding.
+
+#### 8c. Execute tests
+
+From `$WILDFLY_REPO`, build the comma-separated `-pl` argument from the confirmed list and
+run a single Maven invocation:
+
+```bash
+cd $WILDFLY_REPO
+mvn test -pl testsuite/integration/ws[,testsuite/integration/<module2>,...] --also-make
+```
+
+Monitor and report for each submodule:
 - Total tests run
 - Failures (if any)
 - Error details for failed tests
 
 **Interactive Checkpoint**:
-- If all tests pass: "✓ WildFly WS integration tests passed. Continue to dependency alignment check?"
-- If tests fail: "✗ WildFly WS integration tests failed: [summary]. Options: (a) Investigate and I'll provide resolution; (b) Stop and draft PR comment"
+- If all tests pass: "✓ WildFly integration tests passed for submodules: [confirmed list]. Continue to dependency alignment check?"
+- If tests fail: "✗ WildFly integration tests failed in [submodule(s)]: [summary]. Options: (a) Investigate and I'll provide resolution; (b) Stop and draft PR comment"
 
 ### Step 9: Check jbossws-cxf Dependency Alignment
 
@@ -255,8 +292,10 @@ Compile a comprehensive report with the following sections:
 ✓/✗ [Results from Step 7]
 [Details if applicable]
 
-### WildFly WS Integration Tests
-✓/✗ [Results from Step 8]
+### WildFly Integration Tests (Step 8)
+Submodules run: [comma-separated list of actual submodules from Step 8]
+
+✓/✗ [Per-submodule result summary]
 [Details if applicable]
 
 ### jbossws-cxf Dependency Alignment
@@ -354,7 +393,7 @@ This ensures validation against the most current codebase state.
 **Correct sequence**:
 1. Build jbossws-cxf with its original dependency versions (Step 6)
 2. Test jbossws-cxf against upgraded WildFly (Step 7)
-3. Test WildFly WS integration suite (Step 8)
+3. Test WildFly integration test submodules (Step 8) — `ws` always included; additional submodules determined by Step 3 artifact classification
 4. THEN align jbossws-cxf dependencies and retest (Step 9)
 
 This two-stage approach validates:
